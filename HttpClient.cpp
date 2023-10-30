@@ -1,9 +1,10 @@
 #include "HttpClient.hpp"
 
-#include <iostream>
 #include <vector>
 #include <mutex>
 #include <thread>
+#include <exception>
+#include <string>
 #include <cstring>
 #include <unistd.h>
 
@@ -19,7 +20,7 @@ void HttpClient::init_socket(int &sock, const int &port, std::string host_name)
 
     if (host == NULL || host->h_addr == NULL)
     {
-        std::cout << "Error retrieving DNS information\n";
+        throw std::runtime_error("Error retrieving DNS information");
     }
 
     memset(&client, 0, sizeof(client));
@@ -31,13 +32,13 @@ void HttpClient::init_socket(int &sock, const int &port, std::string host_name)
 
     if (sock < 0)
     {
-        std::cout << "Error creating socket\n";
+        throw std::runtime_error("Error creating socket");
     }
 
     if (connect(sock, (struct sockaddr *)&client, sizeof(client)) < 0)
     {
         close(sock);
-        std::cout << "Could not connect\n";
+        throw std::runtime_error("Could not connect");
     }
 }
 
@@ -47,7 +48,7 @@ void HttpClient::send_http_request(int &sock)
 
     if (send(sock, request.c_str(), request.length(), 0) != (int)request.length())
     {
-        std::cout << "Error sending request\n";
+        throw std::runtime_error("Error sending request");
     }
 }
 
@@ -59,7 +60,8 @@ void HttpClient::receive_http_response(int &sock, char* &response, size_t &respo
     int buffer_size = 0;
 
     int i = 0;
-    while (read(sock, &symbol, 1) > 0)
+    int err = 0;
+    while (err = read(sock, &symbol, 1) > 0)
     {
         if (i >= buffer_size)
         {
@@ -79,36 +81,52 @@ void HttpClient::receive_http_response(int &sock, char* &response, size_t &respo
         i++;
     }
 
+    if (err == -1)
+    {
+        delete[] buffer;
+        throw std::runtime_error("read error");
+    }
+
     response = buffer;
     response_size = buffer_size;
 }
 
-void HttpClient::run(std::vector<std::pair<char*, size_t>> &http_responses, std::mutex &mtx, bool &need_finish)
+void HttpClient::run(std::vector<std::pair<char*, size_t>> &http_responses, std::mutex &mtx, std::atomic_bool &need_finish, std::exception_ptr &ex_ptr)
 {
     int sock;
     int port = 80;
 
     while (true)
     {
-        mtx.lock();
         if (need_finish)
         {
-            mtx.unlock();
             break;
         }
-        mtx.unlock();
 
-        init_socket(sock, port, host);
-        send_http_request(sock);
+        try
+        {
+            init_socket(sock, port, host);
+            send_http_request(sock);
 
-        char* response = nullptr;
-        size_t response_size = 0;
-        receive_http_response(sock, response, response_size);
+            char* response = nullptr;
+            size_t response_size = 0;
+            receive_http_response(sock, response, response_size);
 
-        mtx.lock();
-        http_responses.push_back(std::make_pair(response, response_size));
-        mtx.unlock();
+            mtx.lock();
+            http_responses.push_back(std::make_pair(response, response_size));
+            mtx.unlock();
 
-        close(sock);
+            close(sock);
+        }
+        catch (std::exception &e)
+        {
+            close(sock);
+            
+            mtx.lock();
+            ex_ptr = std::current_exception();
+            mtx.unlock();
+
+            break;
+        }
     }
 }

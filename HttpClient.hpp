@@ -1,7 +1,9 @@
 #pragma once
 
-#include <vector>
+#include <atomic>
 #include <mutex>
+#include <vector>
+#include <string>
 
 class HttpClient
 {
@@ -17,5 +19,5 @@ public:
         this->host = host;
     }
     
-    void run(std::vector<std::pair<char*, size_t>> &http_responses, std::mutex &mtx, bool &need_finish);
+    void run(std::vector<std::pair<char*, size_t>> &http_responses, std::mutex &mtx, std::atomic_bool &need_finish, std::exception_ptr &ex_ptr);
 };
